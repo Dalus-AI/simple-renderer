@@ -1,8 +1,8 @@
 """Based on simple_viewer.py from the gsplat library
 
-```bash
+bash
 python examples/simple_viewer.py --scene_grid 13
-```
+
 """
 
 import argparse
@@ -19,84 +19,92 @@ import torch.nn.functional as F
 import tqdm
 import viser
 
-from gsplat._helper import load_test_data
 from gsplat.distributed import cli
 from gsplat.rendering import rasterization, rasterization_2dgs
 from plyfile import PlyData
 
+def _convert_to_tensor(arr, device='cuda:0'):
+    """Convert array to tensor."""
+    if isinstance(arr, np.ndarray):
+        arr = torch.from_numpy(arr).float().to(device)
+    if isinstance(arr, torch.Tensor):
+        arr.to(device=device)
+    if isinstance(arr, list) and isinstance(arr[0], np.ndarray):
+        arr = torch.from_numpy(np.array(arr)).float().to(device)
+    return arr
+
+def load_ply_data(file_path):
+    device = 'cuda:0'
+    print("reading file...")
+    plydata = PlyData.read(file_path)
+    print("done.")
+    vert = plydata["vertex"]
+    sorted_indices = np.argsort(
+        -np.exp(vert["scale_0"] + vert["scale_1"] + vert["scale_2"])
+        / (1 + np.exp(-vert["opacity"]))
+    )
+    N = len(vert)
+
+    positions = np.zeros((N, 3), dtype=np.float32)
+    scales = np.zeros((N, 3), dtype=np.float32)
+    rots = np.zeros((N, 4), dtype=np.float32)
+    colors = np.zeros((N, 4), dtype=np.float32)
+    opacities = np.zeros(N, dtype=np.float32)
+
+    SH_C0 = 0.28209479177387814
+    
+    for i in sorted_indices:
+        v = vert[i]
+        positions[i] = [v["x"], v["y"], v["z"]]
+        scales[i] = np.exp([v["scale_0"], v["scale_1"], v["scale_2"]])
+        rots[i] = [v["rot_0"], v["rot_1"], v["rot_2"], v["rot_3"]]
+
+        colors[i] = [
+            0.5 + SH_C0 * v["f_dc_0"],
+            0.5 + SH_C0 * v["f_dc_1"],
+            0.5 + SH_C0 * v["f_dc_2"],
+            1 / (1 + np.exp(-v["opacity"]))
+        ]
+        opacities[i] = v["opacity"]
+    positions = _convert_to_tensor(positions, device)
+    rots = _convert_to_tensor(rots, device)
+    scales = _convert_to_tensor(scales, device)
+    colors = _convert_to_tensor(colors, device)
+    opacities = _convert_to_tensor(opacities, device)
+    return positions, rots, scales, colors, opacities
+
+def print_free_gpu_space():
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+        free_memory = torch.cuda.mem_get_info(device)[0]  # Free memory in bytes
+        free_memory_gb = free_memory / (1024 ** 3)  # Convert to GB
+        print(f"Free GPU memory: {free_memory_gb:.2f} GB")
+        
 def main(local_rank: int, world_rank, world_size: int, args):
     torch.manual_seed(42)
     device = torch.device("cuda", local_rank)
-
-    if args.load_from_ckpt:
-        means, quats, scales, opacities, sh0, shN = [], [], [], [], [], []
-        for ckpt_path in args.ckpt:
-            ckpt = torch.load(ckpt_path, map_location=device)["splats"]
-            means.append(ckpt["means"])
-            quats.append(F.normalize(ckpt["quats"], p=2, dim=-1))
-            scales.append(torch.exp(ckpt["scales"]))
-            opacities.append(torch.sigmoid(ckpt["opacities"]))
-            sh0.append(ckpt["sh0"])
-            shN.append(ckpt["shN"])
     
-    elif args.load_from_ply:
-        means, quats, scales, opacities = [], [], [], []
-        sh0, shN = [], []  # For spherical harmonics
-
-        for ply_path in args.ply:
-            ply_data = PlyData.read(ply_path)
-
-            vertex = ply_data['vertex']
-            
-            # Extract means (x, y, z)
-            means.append(torch.tensor(np.column_stack([
-                vertex['x'], vertex['y'], vertex['z']
-            ]), device=device, dtype=torch.float32))
-            
-            # Extract quaternions (w, x, y, z)
-            quats.append(torch.tensor(np.column_stack([
-                vertex['rot_0'], vertex['rot_1'], 
-                vertex['rot_2'], vertex['rot_3']
-            ]), device=device, dtype=torch.float32))
-            
-            # Extract scales
-            scales.append(torch.tensor(np.column_stack([
-                vertex['scale_0'], vertex['scale_1'], vertex['scale_2']
-            ]), device=device, dtype=torch.float32))
-            
-            # Extract opacities
-            opacities.append(torch.tensor(vertex['opacity'], 
-                device=device, dtype=torch.float32))
-            
-            # Extract spherical harmonics
-            # First 3 coefficients (DC term)
-            sh0.append(torch.tensor(np.column_stack([
-                vertex['f_dc_0'], vertex['f_dc_1'], vertex['f_dc_2']
-            ]), device=device, dtype=torch.float32))
-            
-            # Remaining coefficients (f_rest_0 through f_rest_44)
-            if 'f_rest_0' in vertex:
-                rest_coeffs = np.column_stack([
-                    [vertex[f'f_rest_{i}'] for i in range(45)]
-                ]).reshape(-1, 15, 3)  # Reshape to match expected format
-                shN.append(torch.tensor(rest_coeffs, device=device, dtype=torch.float32))
+    means, quats, scales, colors, opacities = [], [], [], [], []
+    for ply_path in args.ply:
+        gs_means, gs_quats, gs_scales, gs_colors, gs_opacities = load_ply_data(ply_path)
+        means.append(gs_means)
+        quats.append(gs_quats)
+        scales.append(gs_scales)
+        colors.append(gs_colors)
+        opacities.append(gs_opacities)
 
     # Concatenate if multiple PLY files
     means = torch.cat(means, dim=0)
     quats = torch.cat(quats, dim=0)
     scales = torch.cat(scales, dim=0)
     opacities = torch.cat(opacities, dim=0)
-    sh0 = torch.cat(sh0, dim=0)
-    if len(shN) > 0:
-        shN = torch.cat(shN, dim=0)
-        colors = torch.cat([sh0, shN], dim=-2)
-        sh_degree = int(math.sqrt(colors.shape[-2]) - 1)
-    else:
-        colors = sh0
-        sh_degree = None
+    colors = torch.cat(colors, dim=0)
+    sh_degree = None
+    
     print("Number of Gaussians:", len(means))
     print("Using sh degree:", sh_degree)
-
+    print_free_gpu_space()
+    
     # register and open viewer
     @torch.no_grad()
     def nerfview_render_fn(camera_state: nerfview.CameraState, img_wh: Tuple[int, int]):
@@ -127,9 +135,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
         if args.backend == "3dgs":
             rasterization_fn = rasterization
         elif args.backend == "2dgs":
-            from gsplat import rasterization_inria_wrapper
-
-            rasterization_fn = rasterization_inria_wrapper
+            rasterization_fn = rasterization_2dgs
         else:
             raise ValueError
 
@@ -165,11 +171,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
             np.ndarray: Rendered RGB image as a numpy array with shape (height, width, 3)
         """
         width, height = img_wh
-        c2w = camera_state.c2w
-        K = camera_state.get_K(img_wh)
-        c2w = torch.from_numpy(c2w).float().to(device)
         K = torch.from_numpy(K).float().to(device)
-        viewmat = c2w.inverse()
+        viewmat = torch.from_numpy(T).float().to(device)
 
         if args.backend == "3dgs":
             rasterization_fn = rasterization
@@ -178,7 +181,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
         else:
             raise ValueError
 
-        render_colors, render_alphas, meta = rasterization_fn(
+        render_colors, _, _ = rasterization_fn(
             means,  # [N, 3]
             quats,  # [N, 4]
             scales,  # [N, 3]
@@ -207,7 +210,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
         time.sleep(100000)
 
 
-if __name__ == "__main__":
+if _name_ == "_main_":
     parser = argparse.ArgumentParser()
     
     parser.add_argument(

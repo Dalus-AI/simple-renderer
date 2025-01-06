@@ -7,6 +7,7 @@ First create a virtual environment using the env.yml file. This could be compati
 ```
 "${SHELL}" <(curl -L micro.mamba.pm/install.sh) # Install micromamba
 micromamba create -f env.yml # Create virtual environment
+micromamba activate simple_renderer
 pip install nerfview viser tqdm # Install some additional pip dependencies
 ```
 
