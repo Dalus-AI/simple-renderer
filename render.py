@@ -200,7 +200,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
                 sh_degree=sh_degree,
                 render_mode="RGB",
                 # this is to speedup large-scale rendering by skipping far-away Gaussians.
-                radius_clip=3,
+                radius_clip=0,
             )
         elif args.backend == "2dgs":
             render_colors, render_alphas, _, _, _, _, _ = rasterization_2dgs(
@@ -234,24 +234,13 @@ def main(local_rank: int, world_rank, world_size: int, args):
         print("Viewer running... Ctrl+C to exit.")
         time.sleep(100000)
 
-    # Logic for saving images to disk here (Still testing, will update once done)
-
-if _name_ == "_main_":
+if __name__ == "_main_":
     parser = argparse.ArgumentParser()
     
-    parser.add_argument(
-        "--ckpt", type=str, nargs="+", default=None, help="path to the .pt file"
-    )
     parser.add_argument(
         "--port", type=int, default=8080, help="port for the viewer server"
     )
     parser.add_argument("--backend", type=str, default="3dgs", help="3dgs, 2dgs")
-    parser.add_argument(
-        "--load_from_ckpt", action="store_true", help="load from checkpoint files"
-    )
-    parser.add_argument(
-        "--load_from_ply", action="store_true", help="load from PLY files"
-    )
     parser.add_argument(
         "--web_viewer", action="store_true", help="launch web viewer interface"
     )
