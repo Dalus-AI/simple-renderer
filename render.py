@@ -133,27 +133,39 @@ def main(local_rank: int, world_rank, world_size: int, args):
         viewmat = c2w.inverse()
 
         if args.backend == "3dgs":
-            rasterization_fn = rasterization
+            render_colors, render_alphas, meta = rasterization(
+                means,  # [N, 3]
+                quats,  # [N, 4]
+                scales,  # [N, 3]
+                opacities,  # [N]
+                colors,  # [N, S, 3]
+                viewmat[None],  # [1, 4, 4]
+                K[None],  # [1, 3, 3]
+                width,
+                height,
+                sh_degree=sh_degree,
+                render_mode="RGB",
+                # this is to speedup large-scale rendering by skipping far-away Gaussians.
+                radius_clip=3,
+            )
         elif args.backend == "2dgs":
-            rasterization_fn = rasterization_2dgs
+            render_colors, render_alphas, _, _, _, _, _ = rasterization_2dgs(
+                means,  # [N, 3]
+                quats,  # [N, 4]
+                scales,  # [N, 3]
+                opacities,  # [N]
+                colors,  # [N, 3]
+                viewmat[None],  # [1, 4, 4]
+                K[None],  # [1, 3, 3]
+                width,
+                height,
+                sh_degree=sh_degree,
+                render_mode="RGB",
+                # this is to speedup large-scale rendering by skipping far-away Gaussians.
+                radius_clip=0,
+            )
         else:
             raise ValueError
-
-        render_colors, render_alphas, meta = rasterization_fn(
-            means,  # [N, 3]
-            quats,  # [N, 4]
-            scales,  # [N, 3]
-            opacities,  # [N]
-            colors,  # [N, S, 3]
-            viewmat[None],  # [1, 4, 4]
-            K[None],  # [1, 3, 3]
-            width,
-            height,
-            sh_degree=sh_degree,
-            render_mode="RGB",
-            # this is to speedup large-scale rendering by skipping far-away Gaussians.
-            radius_clip=3,
-        )
         render_rgbs = render_colors[0, ..., 0:3].cpu().numpy()
         return render_rgbs
 
@@ -175,27 +187,40 @@ def main(local_rank: int, world_rank, world_size: int, args):
         viewmat = torch.from_numpy(T).float().to(device)
 
         if args.backend == "3dgs":
-            rasterization_fn = rasterization
+            render_colors, _, _ = rasterization(
+                means,  # [N, 3]
+                quats,  # [N, 4]
+                scales,  # [N, 3]
+                opacities,  # [N]
+                colors,  # [N, S, 3]
+                viewmat[None],  # [1, 4, 4]
+                K[None],  # [1, 3, 3]
+                width,
+                height,
+                sh_degree=sh_degree,
+                render_mode="RGB",
+                # this is to speedup large-scale rendering by skipping far-away Gaussians.
+                radius_clip=3,
+            )
         elif args.backend == "2dgs":
-            rasterization_fn = rasterization_2dgs
+            render_colors, render_alphas, _, _, _, _, _ = rasterization_2dgs(
+                means,  # [N, 3]
+                quats,  # [N, 4]
+                scales,  # [N, 3]
+                opacities,  # [N]
+                colors,  # [N, 3]
+                viewmat[None],  # [1, 4, 4]
+                K[None],  # [1, 3, 3]
+                width,
+                height,
+                sh_degree=sh_degree,
+                render_mode="RGB",
+                # this is to speedup large-scale rendering by skipping far-away Gaussians.
+                radius_clip=0,
+            )
         else:
             raise ValueError
-
-        render_colors, _, _ = rasterization_fn(
-            means,  # [N, 3]
-            quats,  # [N, 4]
-            scales,  # [N, 3]
-            opacities,  # [N]
-            colors,  # [N, S, 3]
-            viewmat[None],  # [1, 4, 4]
-            K[None],  # [1, 3, 3]
-            width,
-            height,
-            sh_degree=sh_degree,
-            render_mode="RGB",
-            # this is to speedup large-scale rendering by skipping far-away Gaussians.
-            radius_clip=3,
-        )
+        
         render_rgbs = render_colors[0, ..., 0:3].cpu().numpy()
         return render_rgbs
 
@@ -209,6 +234,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
         print("Viewer running... Ctrl+C to exit.")
         time.sleep(100000)
 
+    # Logic for saving images to disk here (Still testing, will update once done)
 
 if _name_ == "_main_":
     parser = argparse.ArgumentParser()
