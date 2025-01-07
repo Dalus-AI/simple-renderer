@@ -2,7 +2,7 @@
 Simple Interface to render a gaussian splat from different views
 
 ## Dependencies
-We use `micromamba`[https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html] to create a virtual environment.
+We use [`micromamba`](https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html) to create a virtual environment.
 
 To install micromamba, run:
 ```

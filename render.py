@@ -16,7 +16,7 @@ import nerfview
 import numpy as np
 import torch
 import torch.nn.functional as F
-import tqdm
+from tqdm import tqdm
 import viser
 
 from gsplat.distributed import cli
@@ -32,6 +32,9 @@ def _convert_to_tensor(arr, device='cuda:0'):
     if isinstance(arr, list) and isinstance(arr[0], np.ndarray):
         arr = torch.from_numpy(np.array(arr)).float().to(device)
     return arr
+
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
 
 def load_ply_data(file_path):
     device = 'cuda:0'
@@ -52,12 +55,15 @@ def load_ply_data(file_path):
     opacities = np.zeros(N, dtype=np.float32)
 
     SH_C0 = 0.28209479177387814
-    
-    for i in sorted_indices:
+    print("Parsing Gaussian Splat...")
+    for i in tqdm(sorted_indices):
         v = vert[i]
         positions[i] = [v["x"], v["y"], v["z"]]
         scales[i] = np.exp([v["scale_0"], v["scale_1"], v["scale_2"]])
         rots[i] = [v["rot_0"], v["rot_1"], v["rot_2"], v["rot_3"]]
+        norm = np.linalg.norm(rots[i], ord=2, axis=-1, keepdims=True)
+        # Normalize the quaternion
+        rots[i] = rots[i] / norm
 
         colors[i] = [
             0.5 + SH_C0 * v["f_dc_0"],
@@ -65,7 +71,7 @@ def load_ply_data(file_path):
             0.5 + SH_C0 * v["f_dc_2"],
             1 / (1 + np.exp(-v["opacity"]))
         ]
-        opacities[i] = v["opacity"]
+        opacities[i] = sigmoid(v["opacity"])
     positions = _convert_to_tensor(positions, device)
     rots = _convert_to_tensor(rots, device)
     scales = _convert_to_tensor(scales, device)
@@ -162,7 +168,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
                 sh_degree=sh_degree,
                 render_mode="RGB",
                 # this is to speedup large-scale rendering by skipping far-away Gaussians.
-                radius_clip=0,
+                radius_clip=3,
             )
         else:
             raise ValueError
@@ -234,7 +240,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
         print("Viewer running... Ctrl+C to exit.")
         time.sleep(100000)
 
-if __name__ == "_main_":
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     
     parser.add_argument(
@@ -245,7 +251,7 @@ if __name__ == "_main_":
         "--web_viewer", action="store_true", help="launch web viewer interface"
     )
     parser.add_argument(
-        "--ply", type=str, nargs="+", default=None, help="path to the .ply file(s)"
+        "--ply", type=str, nargs="+", default=None, help="path to the .ply file(s)", required=True
     )
 
     args = parser.parse_args()
