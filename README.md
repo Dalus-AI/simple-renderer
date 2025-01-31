@@ -1,5 +1,5 @@
-# simple-renderer
-Simple Interface to render a gaussian splat from different views
+# Simple Renderer
+Simple interface to render a gaussian splat from different views
 
 ## Dependencies
 We use [`micromamba`](https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html) to create a virtual environment.
@@ -18,21 +18,26 @@ bash install.sh # This may take some time
 
 The `gsplat` library is the primary dependency for this library and needs to be built depending on your machine's CUDA version. The above command will install all dependencies and build the CUDA kernels for gsplat. 
 
-To render a PLY file, you can then simply use:
+Examples scripts can be found under `examples`
+
+# Web Viewer
+To launch a simple web viewer, run
 
 ```bash
-micromamba activate simple_renderer
-python render.py --ply <PATH_TO_PLY_FILE> --web_viewer
-python render.py --ply <PATH_TO_PLY_FILE1> --ply <PATH_TO_PLY_FILE2> --web_viewer # Render a scene with multiple PLY files
+source setup.sh
+python examples/web_viewer.py # loads default lucky cat asset
+python examples/web_viewer.py --ply <PATH> --backend "[2dgs or 3dgs]" # Renders your gaussian splat
 ```
 
-Then navigate to the URL that is printed on screen to view the live rendering.
+# Rendering without interactive viewer
+You can also simply render RGBD data without a web viewer. See the script `examples/render_images.py` for an example.
 
-The script also has a function `simple_render_fn(T, K, img_wh: Tuple[int, int])` that can render images without a web viewer.
+This script will save 3 outputs:
+    - RGB Image
+    - Depth Image
+    - Depth Point Cloud
 
-It takes the following inputs:
-- T: np.array (4,4) representing world-to-camera Transformation Matrix (Camera extrinsics)
-- K: np.array (3,3) representing the camera's intrinsics parameter matrix
-- img_wh: tuple(int, int) representing the width and height of the output image needed
+# Fisheye Cameras
+The above functions can also be used for fisheye cameras. See `examples/fisheye_camera.py` for an example.
 
-It will return a (w,h,3) matrix representing the RGB image from the camera position.
+The major difference to note is that you must provide the distortion coefficients as a 4-dim np array.
