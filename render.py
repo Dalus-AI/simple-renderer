@@ -64,8 +64,12 @@ def process_gaussians(thread_idx, start_idx, end_idx, vert, SH_C0):
     scales = np.zeros((chunk_size, 3), dtype=np.float32)
     rots = np.zeros((chunk_size, 4), dtype=np.float32)
     opacities = np.zeros(chunk_size, dtype=np.float32)
-
-    use_sh = (vert[0]["f_rest_1"] == 0.0 and vert[0]["f_rest_2"] == 0.0 and vert[0]["f_rest_3"] == 0.0)
+    use_sh = True
+    try:
+        _ = vert[0]["f_rest_1"]
+    except ValueError:
+        use_sh = False
+    
     if use_sh:
         colors = np.zeros((chunk_size, 16, 3), dtype=np.float32)
     else:
