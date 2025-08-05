@@ -86,14 +86,10 @@ def process_gaussians(thread_idx, start_idx, end_idx, vert, SH_C0):
         rots[batch_gs_idx] = rots[batch_gs_idx] / norm  # Normalize quaternion
         
         if use_sh: # Use SH
-            colors_raw = np.array([v["f_dc_0"], v["f_dc_1"], v["f_dc_2"]] + [v[f"f_rest_{i}"] for i in range(45)], dtype=np.float32)
-            colors[batch_gs_idx] = np.reshape(colors_raw, (16, 3))
-            # scale_0 = lambda x: 0.5 + SH_C0 * x
-            # colors[batch_gs_idx][0] = [scale_0(v["f_dc_0"]), scale_0(v["f_dc_1"]), scale_0(v["f_dc_2"])]
-            
-            # SH_CIs = np.array([SH_C1]*3 + SH_C2 + SH_C3, dtype=np.float32)
-            # for sh_idx in range(0, 45, 3):
-            #     colors[batch_gs_idx][sh_idx//3+1] = [v[f"f_rest_{sh_idx}"]*SH_CIs[sh_idx//3], v[f"f_rest_{sh_idx+1}"]*SH_CIs[sh_idx//3], v[f"f_rest_{sh_idx+2}"]*SH_CIs[sh_idx//3]]
+            rgbs = np.array([v["f_dc_0"], v["f_dc_1"], v["f_dc_2"]]).reshape((1,3))
+            sh_rest = np.reshape(np.array([v[f"f_rest_{i}"] for i in range(45)], dtype=np.float32), (3, 15))
+            sh_rest = sh_rest.transpose(1,0)
+            colors[batch_gs_idx] = np.concatenate((rgbs, sh_rest), axis=0)
         else:
             colors[batch_gs_idx] = [
                 0.5 + SH_C0 * v["f_dc_0"],
