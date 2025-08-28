@@ -10,7 +10,7 @@ import math
 import os
 import time
 from typing import Tuple
-import requests
+
 import imageio
 import nerfview
 import numpy as np
@@ -19,34 +19,14 @@ import torch.nn.functional as F
 from tqdm import trange
 import viser
 import multiprocessing as mp
-import io
-
 from scipy.spatial.transform import Rotation as R
 
 from gsplat.distributed import cli
 from gsplat.rendering import rasterization, rasterization_2dgs
 from plyfile import PlyData
 
-enable_difix = False
-
-def rotate_splat_from_euler(positions, quats, angle_rotations, degrees=True, as_tensor=False):
-    print("Rotating splat")
-    rotation_matrix = None
-    for (axis, mag) in angle_rotations:
-            if rotation_matrix is not None:
-                    rotation_matrix = R.from_euler(axis, mag, degrees=degrees) * rotation_matrix
-            else:
-                    rotation_matrix = R.from_euler(axis, mag, degrees=degrees)
-    # 1: Rotate points
-    new_positions = positions @ rotation_matrix.as_matrix().T
-    # Step 2: Create a rotation matrix for a 90-degree rotation around the x-axis
-    # Rotate the random quaternions using the rotation matrix
-    new_quats = (rotation_matrix * R.from_quat(quats, scalar_first=True)).as_quat(scalar_first=True)
-    if as_tensor:
-          new_positions = _convert_to_tensor(new_positions)
-          new_quats = _convert_to_tensor(new_quats)
-    print("done.")
-    return new_positions, new_quats
+# Difix
+from difix.gsplat_model_inference import GSplatDifixModel
 
 def _convert_to_tensor(arr, device='cuda:0'):
     """Convert array to tensor."""
@@ -154,6 +134,7 @@ def print_free_gpu_space():
         print(f"Free GPU memory: {free_memory_gb:.2f} GB")
         
 def main(local_rank: int, world_rank, world_size: int, args):
+    difix_enabled = True
     torch.manual_seed(42)
     device = torch.device("cuda", local_rank)
     server = viser.ViserServer(port=args.port, verbose=False)
@@ -174,37 +155,11 @@ def main(local_rank: int, world_rank, world_size: int, args):
     colors = torch.cat(colors, dim=0)
     sh_degree = None if len(colors.shape) == 2 else int(np.sqrt(colors.shape[1] - 1))
 
-    if int(args.rotate) == 1:
-        means, quats = rotate_splat_from_euler(means.cpu().numpy(), quats.cpu().numpy(), angle_rotations=[('x', 180.0)], as_tensor=True)
     print("Number of Gaussians:", len(means))
     print("Using sh degree:", sh_degree)
     print_free_gpu_space()
 
-    def _add_gui(server: viser.ViserServer, viewer: nerfview.Viewer):
-        refine_button = server.gui.add_button(label="Refine", hint="Click to refine rendering")
-
-        @refine_button.on_click
-        def _handle_refine(event: viser.GuiEvent):
-            client = event.client
-            if client is None:
-                return
-            try:
-                img = client.camera.get_render(height=480, width=640, transport_format="jpeg")  # (H,W,3) uint8
-                imageio.imwrite("gsplat_output.jpg", img)
-
-                with open("gsplat_output.jpg", "rb") as f:
-                    resp = requests.post(
-                        "http://localhost:8001/infer",
-                        files={"file": ("gsplat_output.jpg", f, "image/jpeg")},
-                        timeout=(5, 25),
-                    )
-                resp.raise_for_status()
-
-                difix = imageio.imread(io.BytesIO(resp.content))
-                imageio.imwrite("/data/parallax_viewer/public/difix_output.jpg", difix)
-                print("Saved gsplat_output.jpg and difix_output.jpg")
-            except Exception as e:
-                print("Difix request failed:", repr(e))
+    DifixModel = GSplatDifixModel()
     
     # register and open viewer
     @torch.no_grad()
@@ -226,7 +181,6 @@ def main(local_rank: int, world_rank, world_size: int, args):
         3. Performs Gaussian splatting using the specified backend
         4. Returns the final rendered image
         """
-        global enable_difix
         width, height = img_wh
         c2w = camera_state.c2w
         K = camera_state.get_K(img_wh)
@@ -268,16 +222,71 @@ def main(local_rank: int, world_rank, world_size: int, args):
             )
         else:
             raise ValueError
-        render_rgbs = render_colors[0, ..., 0:3].cpu().numpy()
-        return render_rgbs    
+        render_rgbs = render_colors[..., 0:3]
+        if difix_enabled:
+            render_rgbs = DifixModel.forward(render_rgbs)
+        return render_rgbs.cpu().numpy()
 
-    viewer = nerfview.Viewer(
+
+    @torch.no_grad()
+    def simple_render_fn(T, K, img_wh: Tuple[int, int]):
+        """Render a frame of the 3D Gaussian scene from a given camera viewpoint.
+
+        Args:
+            T (np array): World-to-camera transformation matrix
+            K (np array): Camera intrinsic parameters
+            img_wh (Tuple[int, int]): Target image dimensions (width, height)
+
+        Returns:
+            np.ndarray: Rendered RGB image as a numpy array with shape (height, width, 3)
+        """
+        width, height = img_wh
+        K = torch.from_numpy(K).float().to(device)
+        viewmat = torch.from_numpy(T).float().to(device)
+
+        if args.backend == "3dgs":
+            render_colors, _, _ = rasterization(
+                means,  # [N, 3]
+                quats,  # [N, 4]
+                scales,  # [N, 3]
+                opacities,  # [N]
+                colors,  # [N, S, 3]
+                viewmat[None],  # [1, 4, 4]
+                K[None],  # [1, 3, 3]
+                width,
+                height,
+                sh_degree=sh_degree,
+                render_mode="RGB",
+                # this is to speedup large-scale rendering by skipping far-away Gaussians.
+                radius_clip=0,
+            )
+        elif args.backend == "2dgs":
+            render_colors, render_alphas, _, _, _, _, _ = rasterization_2dgs(
+                means,  # [N, 3]
+                quats,  # [N, 4]
+                scales,  # [N, 3]
+                opacities,  # [N]
+                colors,  # [N, 3]
+                viewmat[None],  # [1, 4, 4]
+                K[None],  # [1, 3, 3]
+                width,
+                height,
+                sh_degree=sh_degree,
+                render_mode="RGB",
+                # this is to speedup large-scale rendering by skipping far-away Gaussians.
+                radius_clip=0,
+            )
+        else:
+            raise ValueError
+        
+        render_rgbs = render_colors[0, ..., 0:3].cpu().numpy()
+        return render_rgbs
+
+    _ = nerfview.Viewer(
         server=server,
         render_fn=nerfview_render_fn,
         mode="rendering",
     )
-    _add_gui(server, viewer)
-
     print("Viewer running... Ctrl+C to exit.")
     time.sleep(600)
 
@@ -291,8 +300,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ply", type=str, nargs="+", default=None, help="path to the .ply file(s)", required=True
     )
-    parser.add_argument(
-        "--rotate", type=int, default=0, help="rotate around x by 180", required=False)
 
     args = parser.parse_args()
 

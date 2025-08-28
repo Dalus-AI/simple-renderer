@@ -20,7 +20,6 @@ from tqdm import trange
 import viser
 import multiprocessing as mp
 import io
-
 from scipy.spatial.transform import Rotation as R
 
 from gsplat.distributed import cli
@@ -181,30 +180,22 @@ def main(local_rank: int, world_rank, world_size: int, args):
     print_free_gpu_space()
 
     def _add_gui(server: viser.ViserServer, viewer: nerfview.Viewer):
-        refine_button = server.gui.add_button(label="Refine", hint="Click to refine rendering")
-
+        refine_button = server.gui.add_button(
+            label="Refine",
+            hint="Click to refine rendering"
+        )
         @refine_button.on_click
-        def _handle_refine(event: viser.GuiEvent):
-            client = event.client
-            if client is None:
-                return
+        def _handle_refine(event):
+            print("User clicked refine button")
             try:
-                img = client.camera.get_render(height=480, width=640, transport_format="jpeg")  # (H,W,3) uint8
-                imageio.imwrite("gsplat_output.jpg", img)
-
-                with open("gsplat_output.jpg", "rb") as f:
-                    resp = requests.post(
-                        "http://localhost:8001/infer",
-                        files={"file": ("gsplat_output.jpg", f, "image/jpeg")},
-                        timeout=(5, 25),
-                    )
-                resp.raise_for_status()
-
-                difix = imageio.imread(io.BytesIO(resp.content))
-                imageio.imwrite("/data/parallax_viewer/public/difix_output.jpg", difix)
-                print("Saved gsplat_output.jpg and difix_output.jpg")
+                response = requests.post("http://localhost:8001/infer", files={"file": open("gsplat_output.png", "rb")})
+                print("Difix response:", response)
             except Exception as e:
                 print("Difix request failed:", repr(e))
+                return render_rgbs
+            difix_output = imageio.imread(io.BytesIO(response.content))
+            imageio.imwrite("difix_output.png", difix_output)
+            print("Wrote difix_output.png")
     
     # register and open viewer
     @torch.no_grad()
@@ -269,6 +260,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
         else:
             raise ValueError
         render_rgbs = render_colors[0, ..., 0:3].cpu().numpy()
+        render_rgbs_u8 = (render_rgbs * 255).clip(0, 255).astype(np.uint8)
+        imageio.imwrite("gsplat_output.png", render_rgbs_u8)
         return render_rgbs    
 
     viewer = nerfview.Viewer(
@@ -292,7 +285,7 @@ if __name__ == "__main__":
         "--ply", type=str, nargs="+", default=None, help="path to the .ply file(s)", required=True
     )
     parser.add_argument(
-        "--rotate", type=int, default=0, help="rotate around x by 180", required=False)
+        "--rotate", type=int, default=1, help="rotate around x by 180", required=False)
 
     args = parser.parse_args()
 
