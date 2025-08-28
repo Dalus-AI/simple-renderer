@@ -20,6 +20,7 @@ from tqdm import trange
 import viser
 import multiprocessing as mp
 import io
+from pathlib import Path
 
 from scipy.spatial.transform import Rotation as R
 
@@ -201,8 +202,10 @@ def main(local_rank: int, world_rank, world_size: int, args):
                 resp.raise_for_status()
 
                 difix = imageio.imread(io.BytesIO(resp.content))
-                imageio.imwrite("/data/parallax_viewer/public/difix_output.jpg", difix)
-                print("Saved gsplat_output.jpg and difix_output.jpg")
+                ply_file=args.ply[0]
+                project_name = Path(ply_file).name.split('.')[0]
+                imageio.imwrite(f"/data/parallax_viewer/public/difix_output_{project_name}.jpg", difix)
+                print(f"Saved gsplat_output.jpg and difix_output_{project_name}.jpg")
             except Exception as e:
                 print("Difix request failed:", repr(e))
     
