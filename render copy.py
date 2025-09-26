@@ -281,20 +281,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
     )
     _add_gui(server, viewer)
 
-    print("Viewer running... waiting for first connect/disconnect to exit.")
-    # Poll for connections; exit after first connect then zero clients remain.
-    had_first_client = False
-    while True:
-        try:
-            clients = server.get_clients()
-            num = len(clients)
-        except Exception:
-            num = 0
-        if num > 0:
-            had_first_client = True
-        if had_first_client and num == 0:
-            break
-        time.sleep(10)
+    print("Viewer running... Ctrl+C to exit.")
+    time.sleep(600)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
